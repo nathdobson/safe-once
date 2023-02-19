@@ -1,6 +1,6 @@
 use std::panic::catch_unwind;
 use crate::{LockError, OnceEntry, PoisonError};
-use crate::sync::{OnceLock};
+use crate::sync::OnceLock;
 
 #[test]
 fn test_once() {
