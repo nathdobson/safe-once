@@ -1,5 +1,10 @@
 use std::panic::catch_unwind;
-use crate::{LockError, OnceEntry, PoisonError};
+use std::sync::{Arc, Barrier};
+use std::thread;
+use std::time::Duration;
+use parking_lot::{Mutex, RwLock};
+use crate::{LockError, PoisonError};
+use crate::once::OnceEntry;
 use crate::sync::OnceLock;
 
 #[test]
@@ -32,7 +37,7 @@ fn test_relock() {
         OnceEntry::Occupied(_) => unreachable!(),
         OnceEntry::Vacant(x) => { x.init(Box::new(5)); }
     }
-    assert_eq!(**once.get().unwrap(), 5);
+    assert_eq!(**once.try_get().unwrap(), 5);
 }
 
 #[test]
@@ -52,5 +57,51 @@ fn test_panic() {
             panic!();
         });
     }).is_err());
-    assert_eq!(once.get_checked().unwrap_err(), PoisonError);
+    assert_eq!(once.try_get_checked().unwrap_err(), PoisonError);
+}
+
+#[test]
+fn test_get_blocking() {
+    let once = Arc::new(OnceLock::<usize>::new());
+    let barrier = Arc::new(Barrier::new(2));
+    let t = thread::spawn({
+        let once = once.clone();
+        let barrier = barrier.clone();
+        move || {
+            once.get_or_init(|| {
+                barrier.wait();
+                thread::sleep(Duration::from_millis(100));
+                42
+            });
+        }
+    });
+    barrier.wait();
+    assert_eq!(once.get(), Some(&42));
+}
+
+#[test]
+fn test_stress() {
+    for threads in 1..=8 {
+        let onces = Arc::new(vec![OnceLock::new(); 1000]);
+        let barrier = Arc::new(Barrier::new(threads));
+        let wins: usize = (0..threads).map(
+            |_| {
+                let barrier = barrier.clone();
+                let onces = onces.clone();
+
+                thread::spawn(move || {
+                    let mut wins = 0;
+                    for once in onces.iter() {
+                        barrier.wait();
+                        once.get_or_init(|| {
+                            wins += 1;
+                            ()
+                        });
+                    }
+                    wins
+                })
+            }
+        ).collect::<Vec<_>>().into_iter().map(|x| x.join()).sum::<thread::Result<usize>>().unwrap();
+        assert_eq!(wins, onces.len());
+    }
 }
