@@ -5,7 +5,7 @@
 #![allow(unused_assignments)]
 
 
-pub mod error;
+// pub mod error;
 pub mod raw;
 
 use std::cell::UnsafeCell;
@@ -15,13 +15,13 @@ use std::mem::MaybeUninit;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::thread::panicking;
 use raw::{RawOnce, RawOnceState};
-use crate::error::{LockError, PoisonError};
+// use crate::error::{LockError, PoisonError};
 
 #[cfg(feature = "sync")]
 pub mod sync;
 
 #[cfg(feature = "unsync")]
-pub mod unsync;
+pub mod cell;
 
 pub mod lazy;
 pub mod once;

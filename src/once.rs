@@ -3,8 +3,9 @@ use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 use std::panic::{RefUnwindSafe, UnwindSafe};
+use std::sync::{PoisonError, TryLockError};
 use std::thread::panicking;
-use crate::{LockError, PoisonError, RawOnce, RawOnceState};
+use crate::{RawOnce, RawOnceState};
 
 pub enum OnceEntry<'a, R: RawOnce, T> {
     Occupied(&'a T),
@@ -60,13 +61,13 @@ impl<R: RawOnce, T> Once<R, T> {
             RawOnceState::Occupied => OnceEntry::Occupied((*self.data.get()).assume_init_ref()),
         }
     }
-    pub fn lock_checked(&self) -> Result<OnceEntry<R, T>, LockError> {
+    pub fn lock_checked(&self) -> Result<OnceEntry<R, T>, TryLockError<()>> {
         unsafe {
             Ok(self.make_entry(self.raw.lock_checked()?))
         }
     }
     pub fn lock(&self) -> OnceEntry<R, T> { self.lock_checked().unwrap() }
-    pub fn try_lock_checked(&self) -> Result<Option<OnceEntry<R, T>>, LockError> {
+    pub fn try_lock_checked(&self) -> Result<Option<OnceEntry<R, T>>, TryLockError<()>> {
         unsafe {
             Ok(self.raw.try_lock_checked()?.map(|e| self.make_entry(e)))
         }
@@ -77,10 +78,10 @@ impl<R: RawOnce, T> Once<R, T> {
     pub fn get_or_init(&self, init: impl FnOnce() -> T) -> &T {
         self.get_or_init_checked(init).unwrap()
     }
-    pub fn get_or_init_checked(&self, init: impl FnOnce() -> T) -> Result<&T, LockError> {
+    pub fn get_or_init_checked(&self, init: impl FnOnce() -> T) -> Result<&T, TryLockError<()>> {
         Ok(self.lock_checked()?.or_init(init))
     }
-    pub fn try_get_checked(&self) -> Result<Option<&T>, PoisonError> {
+    pub fn try_get_checked(&self) -> Result<Option<&T>, PoisonError<()>> {
         unsafe {
             Ok(match self.raw.try_get_checked()? {
                 RawOnceState::Vacant => None,
@@ -88,7 +89,7 @@ impl<R: RawOnce, T> Once<R, T> {
             })
         }
     }
-    pub fn get_checked(&self) -> Result<Option<&T>, LockError> {
+    pub fn get_checked(&self) -> Result<Option<&T>, TryLockError<()>> {
         unsafe {
             Ok(match self.raw.get_checked()? {
                 RawOnceState::Vacant => None,
@@ -175,7 +176,7 @@ impl<R: RawOnce, T: Clone> Clone for Once<R, T> {
         match self.try_get_checked() {
             Ok(Some(x)) => Once::from(x.clone()),
             Ok(None) => Once::new(),
-            Err(PoisonError) => Once::poisoned(),
+            Err(_) => Once::poisoned(),
         }
     }
 }

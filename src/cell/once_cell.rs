@@ -1,9 +1,10 @@
 use std::cell::{Cell, UnsafeCell};
 use std::fmt::{Debug, Formatter};
 use std::mem::MaybeUninit;
+use std::sync::{PoisonError, TryLockError};
 use std::thread::panicking;
 use parking_lot::lock_api::GuardNoSend;
-use crate::error::{LockError, PoisonError};
+// use crate::error::{LockError, PoisonError};
 use crate::once::Once;
 use crate::raw::{RawOnce, RawOnceState};
 
@@ -25,11 +26,11 @@ unsafe impl RawOnce for RawOnceCell {
     const INIT: Self = RawOnceCell(Cell::new(State::Initialized));
     const POISON: Self = RawOnceCell(Cell::new(State::Poison));
 
-    fn lock_checked(&self) -> Result<RawOnceState, LockError> {
-        self.try_lock_checked()?.ok_or(LockError::CycleError)
+    fn lock_checked(&self) -> Result<RawOnceState, TryLockError<()>> {
+        self.try_lock_checked()?.ok_or(TryLockError::WouldBlock)
     }
 
-    fn try_lock_checked(&self) -> Result<Option<RawOnceState>, PoisonError> {
+    fn try_lock_checked(&self) -> Result<Option<RawOnceState>, PoisonError<()>> {
         match self.0.get() {
             State::Uninit => {
                 self.0.set(State::Initializing);
@@ -40,19 +41,19 @@ unsafe impl RawOnce for RawOnceCell {
             State::Initialized =>
                 Ok(Some(RawOnceState::Occupied)),
             State::Poison =>
-                Err(PoisonError),
+                Err(PoisonError::new(())),
         }
     }
-    fn get_checked(&self) -> Result<RawOnceState, LockError> {
+    fn get_checked(&self) -> Result<RawOnceState, TryLockError<()>> {
         Ok(self.try_get_checked()?)
     }
 
-    fn try_get_checked(&self) -> Result<RawOnceState, PoisonError> {
+    fn try_get_checked(&self) -> Result<RawOnceState, PoisonError<()>> {
         match self.0.get() {
             State::Uninit => Ok(RawOnceState::Vacant),
             State::Initializing => Ok(RawOnceState::Vacant),
             State::Initialized => Ok(RawOnceState::Occupied),
-            State::Poison => Err(PoisonError),
+            State::Poison => Err(PoisonError::new(())),
         }
     }
     unsafe fn unlock_nopoison(&self) {

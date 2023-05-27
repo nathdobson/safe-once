@@ -1,9 +1,8 @@
 use std::panic::catch_unwind;
-use std::sync::{Arc, Barrier};
+use std::sync::{Arc, Barrier, PoisonError, TryLockError};
 use std::thread;
 use std::time::Duration;
 use parking_lot::{Mutex, RwLock};
-use crate::{LockError, PoisonError};
 use crate::once::OnceEntry;
 use crate::sync::OnceLock;
 
@@ -44,7 +43,10 @@ fn test_relock() {
 fn test_recurrent() {
     let once = OnceLock::<Box<isize>>::new();
     once.get_or_init(|| {
-        assert_eq!(once.get_or_init_checked(|| unreachable!()).unwrap_err(), LockError::CycleError);
+        match once.get_or_init_checked(|| unreachable!()).unwrap_err() {
+            TryLockError::WouldBlock => {}
+            _ => panic!()
+        };
         Box::new(5)
     });
 }
@@ -57,7 +59,7 @@ fn test_panic() {
             panic!();
         });
     }).is_err());
-    assert_eq!(once.try_get_checked().unwrap_err(), PoisonError);
+    let x: PoisonError<()> = once.try_get_checked().unwrap_err();
 }
 
 #[test]

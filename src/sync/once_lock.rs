@@ -6,12 +6,13 @@ use std::num::NonZeroUsize;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{PoisonError, TryLockError};
 use std::thread::{panicking, Thread};
 use atomic::Atomic;
 use parking_lot::lock_api::GuardSend;
 
 use parking_lot_core::{DEFAULT_PARK_TOKEN, DEFAULT_UNPARK_TOKEN, SpinWait};
-use crate::error::{LockError, PoisonError};
+// use crate::error::{LockError, PoisonError};
 use crate::once::Once;
 use crate::raw::{RawOnce, RawOnceState};
 use crate::sync::state::State;
@@ -25,14 +26,14 @@ pub struct RawOnceLock {
 
 impl RawOnceLock {
     #[cold]
-    fn lock_checked_slow(&self, mut state: State) -> Result<RawOnceState, LockError> {
+    fn lock_checked_slow(&self, mut state: State) -> Result<RawOnceState, TryLockError<()>> {
         let tid = ThreadId::current();
         loop {
             if state.init() {
                 return Ok(RawOnceState::Occupied);
             }
             if state.poison() {
-                return Err(LockError::PoisonError);
+                return Err(PoisonError::new(()).into());
             }
             if !state.locked() {
                 assert_eq!(state, State::new());
@@ -44,7 +45,7 @@ impl RawOnceLock {
                 return Ok(RawOnceState::Vacant);
             }
             if state.thread_id() == tid {
-                return Err(LockError::CycleError);
+                return Err(TryLockError::WouldBlock);
             }
             if !state.parked() {
                 if let Err(new_state) = self.state.compare_exchange_weak(
@@ -76,21 +77,21 @@ impl RawOnceLock {
     }
 
     #[cold]
-    fn get_checked_slow(&self, mut state: State) -> Result<RawOnceState, LockError> {
+    fn get_checked_slow(&self, mut state: State) -> Result<RawOnceState, TryLockError<()>> {
         let tid = ThreadId::current();
         loop {
             if state.init() {
                 return Ok(RawOnceState::Occupied);
             }
             if state.poison() {
-                return Err(LockError::PoisonError);
+                return Err(PoisonError::new(()).into());
             }
             if !state.locked() {
                 assert_eq!(state, State::new());
                 return Ok(RawOnceState::Vacant);
             }
             if state.thread_id() == tid {
-                return Err(LockError::CycleError);
+                return Err(TryLockError::WouldBlock);
             }
             if !state.parked() {
                 if let Err(new_state) = self.state.compare_exchange_weak(
@@ -122,14 +123,14 @@ impl RawOnceLock {
     }
 
     #[cold]
-    fn try_lock_checked_slow(&self, mut state: State) -> Result<Option<RawOnceState>, PoisonError> {
+    fn try_lock_checked_slow(&self, mut state: State) -> Result<Option<RawOnceState>, PoisonError<()>> {
         let tid = ThreadId::current();
         loop {
             if state.init() {
                 return Ok(Some(RawOnceState::Occupied));
             }
             if state.poison() {
-                return Err(PoisonError);
+                return Err(PoisonError::new(()));
             }
             if !state.locked() {
                 assert_eq!(state, State::new());
@@ -161,7 +162,7 @@ unsafe impl RawOnce for RawOnceLock {
     const INIT: Self = RawOnceLock { state: Atomic::new(State::new().with_init(true)) };
     const POISON: Self = RawOnceLock { state: Atomic::new(State::new().with_poison(true)) };
 
-    fn lock_checked(&self) -> Result<RawOnceState, LockError> {
+    fn lock_checked(&self) -> Result<RawOnceState, TryLockError<()>> {
         let state = self.state.load(Ordering::Acquire);
         if state.init() {
             return Ok(RawOnceState::Occupied);
@@ -169,7 +170,7 @@ unsafe impl RawOnce for RawOnceLock {
         self.lock_checked_slow(state)
     }
 
-    fn try_lock_checked(&self) -> Result<Option<RawOnceState>, PoisonError> {
+    fn try_lock_checked(&self) -> Result<Option<RawOnceState>, PoisonError<()>> {
         let state = self.state.load(Ordering::Acquire);
         if state.init() {
             return Ok(Some(RawOnceState::Occupied));
@@ -177,7 +178,7 @@ unsafe impl RawOnce for RawOnceLock {
         self.try_lock_checked_slow(state)
     }
 
-    fn get_checked(&self) -> Result<RawOnceState, LockError> {
+    fn get_checked(&self) -> Result<RawOnceState, TryLockError<()>> {
         let state = self.state.load(Ordering::Acquire);
         if state.init() {
             return Ok(RawOnceState::Occupied);
@@ -185,13 +186,13 @@ unsafe impl RawOnce for RawOnceLock {
         self.get_checked_slow(state)
     }
 
-    fn try_get_checked(&self) -> Result<RawOnceState, PoisonError> {
+    fn try_get_checked(&self) -> Result<RawOnceState, PoisonError<()>> {
         let state = self.state.load(Ordering::Acquire);
         if state.init() {
             return Ok(RawOnceState::Occupied);
         }
         if state.poison() {
-            return Err(PoisonError);
+            return Err(PoisonError::new(()));
         }
         return Ok(RawOnceState::Vacant);
     }
@@ -207,7 +208,6 @@ unsafe impl RawOnce for RawOnceLock {
     unsafe fn unlock_poison(&self) {
         self.unlock_impl(State::new().with_poison(true));
     }
-
 }
 
 impl RefUnwindSafe for RawOnceLock {}
