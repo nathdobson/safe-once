@@ -1,3 +1,5 @@
+//! Implementations that are [Sync](::std::marker::Sync).
+
 mod once_lock;
 #[cfg(test)]
 mod test;

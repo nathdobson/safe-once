@@ -1,5 +1,6 @@
+//! A lazy initialization pattern where the initializer is supplied at construction.
+
 use std::cell::Cell;
-use std::default::default;
 use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
 use crate::once::Once;
@@ -25,7 +26,7 @@ impl<R: RawOnce, T, F: FnOnce() -> T> Deref for Lazy<R, T, F> {
 
 impl<R: RawOnce, T: Default> Default for Lazy<R, T> {
     fn default() -> Self {
-        Lazy::new(default)
+        Lazy::new(Default::default)
     }
 }
 

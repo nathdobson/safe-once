@@ -1,3 +1,5 @@
+//! A lazy initialization pattern where the initializer is supplied at access time.
+
 use std::cell::UnsafeCell;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
