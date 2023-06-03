@@ -5,10 +5,14 @@
 
 
 //!
-//! Alternative implementations of the standard library's [LazyCell](std::cell::LazyCell),
-//! [LazyLock](std::sync::LazyLock), [OnceCell](std::cell::OnceCell), and [OnceLock](std::sync::OnceLock).
-//! This crate's implementations are safer than the standard implementations because they typically panic
+//! This crate provides alternative implementations of the standard library's
+//! [LazyCell](std::cell::LazyCell), [LazyLock](std::sync::LazyLock),
+//! [OnceCell](std::cell::OnceCell), and [OnceLock](std::sync::OnceLock).  This crate's
+//! implementations are safer than the standard implementations because they typically panic
 //! instead of deadlocking.
+//!
+//! This crate additionally provides [sync::FusedLock] and [cell::FusedCell] which generalize `Lazy*`
+//! and `Once*` by providing a mutex that can be permanently made read-only.
 //!
 //! # `sync::LazyLock` and `cell::LazyCell`
 //! Lazily initialize a variable with [sync::LazyLock] (or [cell::LazyCell] for single-threaded code).
@@ -30,7 +34,7 @@
 //! Or use the `lock` method to have complete flexibility over initialization:
 //! ```
 //! use safe_once::once::OnceEntry;
-//! use safe_once::sync::{OnceLock, RawOnceLock};
+//! use safe_once::sync::{OnceLock, RawFusedLock};
 //! static ONCE: OnceLock<String> = OnceLock::new();
 //! match ONCE.lock(){
 //!     OnceEntry::Occupied(value) => unreachable!(),
@@ -44,6 +48,27 @@
 //!     OnceEntry::Occupied(value) => assert_eq!(value, "hello"),
 //!     OnceEntry::Vacant(lock) => unreachable!()
 //! }
+//! ```
+//! # `sync::FusedLock` and `cell::FusedCell`
+//!
+//! For complete flexibility over initialization, consider [sync::FusedLock] and [cell::FusedCell] .
+//! This allows multiple mutation steps before making the value readable:
+//!
+//! ```
+//! use safe_once::fused::FusedEntry;
+//! use safe_once::sync::{FusedLock};
+//! use safe_once::cell::{FusedCell};
+//! let fused = FusedLock::new(vec![]);
+//! for i in 0..10 {
+//!     match fused.write(){
+//!         FusedEntry::Read(_) => unreachable!(),
+//!         FusedEntry::Write(mut vec) => vec.push(i),
+//!     }
+//! }
+//! fused.write().or_fuse(|vec|{
+//!     vec.reverse();
+//! });
+//! assert_eq!(fused.read().unwrap(), &[9,8,7,6,5,4,3,2,1,0]);
 //! ```
 //!
 //! # Deadlock detection
@@ -67,15 +92,12 @@ use std::marker::PhantomData;
 use std::mem::MaybeUninit;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::thread::panicking;
-use raw::{RawOnce, RawOnceState};
-// use crate::error::{LockError, PoisonError};
+use raw::{RawFused, RawFusedState};
 
-#[cfg(feature = "sync")]
 pub mod sync;
-
-#[cfg(feature = "unsync")]
 pub mod cell;
 
 pub mod lazy;
 pub mod once;
 pub mod fused;
+// pub mod mut_cell;

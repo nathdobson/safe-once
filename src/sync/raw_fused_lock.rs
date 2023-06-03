@@ -14,23 +14,23 @@ use parking_lot::lock_api::GuardSend;
 use parking_lot_core::{DEFAULT_PARK_TOKEN, DEFAULT_UNPARK_TOKEN, SpinWait};
 // use crate::error::{LockError, PoisonError};
 use crate::once::Once;
-use crate::raw::{RawOnce, RawOnceState};
+use crate::raw::{RawFused, RawFusedState};
 use crate::sync::state::State;
 use crate::sync::thread_id::ThreadId;
 
 
 #[derive(Debug)]
-pub struct RawOnceLock {
+pub struct RawFusedLock {
     pub state: Atomic<State>,
 }
 
-impl RawOnceLock {
+impl RawFusedLock {
     #[cold]
-    fn lock_checked_slow(&self, mut state: State) -> Result<RawOnceState, TryLockError<()>> {
+    fn lock_checked_slow(&self, mut state: State) -> Result<RawFusedState, TryLockError<()>> {
         let tid = ThreadId::current();
         loop {
             if state.init() {
-                return Ok(RawOnceState::Occupied);
+                return Ok(RawFusedState::Read);
             }
             if state.poison() {
                 return Err(PoisonError::new(()).into());
@@ -42,7 +42,7 @@ impl RawOnceLock {
                     state = new_state;
                     continue;
                 }
-                return Ok(RawOnceState::Vacant);
+                return Ok(RawFusedState::Write);
             }
             if state.thread_id() == tid {
                 return Err(TryLockError::WouldBlock);
@@ -77,18 +77,18 @@ impl RawOnceLock {
     }
 
     #[cold]
-    fn get_checked_slow(&self, mut state: State) -> Result<RawOnceState, TryLockError<()>> {
+    fn get_checked_slow(&self, mut state: State) -> Result<RawFusedState, TryLockError<()>> {
         let tid = ThreadId::current();
         loop {
             if state.init() {
-                return Ok(RawOnceState::Occupied);
+                return Ok(RawFusedState::Read);
             }
             if state.poison() {
                 return Err(PoisonError::new(()).into());
             }
             if !state.locked() {
                 assert_eq!(state, State::new());
-                return Ok(RawOnceState::Vacant);
+                return Ok(RawFusedState::Write);
             }
             if state.thread_id() == tid {
                 return Err(TryLockError::WouldBlock);
@@ -123,11 +123,11 @@ impl RawOnceLock {
     }
 
     #[cold]
-    fn try_lock_checked_slow(&self, mut state: State) -> Result<Option<RawOnceState>, PoisonError<()>> {
+    fn try_lock_checked_slow(&self, mut state: State) -> Result<Option<RawFusedState>, PoisonError<()>> {
         let tid = ThreadId::current();
         loop {
             if state.init() {
-                return Ok(Some(RawOnceState::Occupied));
+                return Ok(Some(RawFusedState::Read));
             }
             if state.poison() {
                 return Err(PoisonError::new(()));
@@ -139,7 +139,7 @@ impl RawOnceLock {
                     state = new_state;
                     continue;
                 }
-                return Ok(Some(RawOnceState::Vacant));
+                return Ok(Some(RawFusedState::Write));
             }
             return Ok(None);
         }
@@ -156,60 +156,71 @@ impl RawOnceLock {
     }
 }
 
-unsafe impl RawOnce for RawOnceLock {
+unsafe impl RawFused for RawFusedLock {
     type GuardMarker = GuardSend;
-    const UNINIT: Self = RawOnceLock { state: Atomic::new(State::new()) };
-    const INIT: Self = RawOnceLock { state: Atomic::new(State::new().with_init(true)) };
-    const POISON: Self = RawOnceLock { state: Atomic::new(State::new().with_poison(true)) };
+    const UNLOCKED: Self = RawFusedLock { state: Atomic::new(State::new()) };
+    const READ: Self = RawFusedLock { state: Atomic::new(State::new().with_init(true)) };
+    const POISON: Self = RawFusedLock { state: Atomic::new(State::new().with_poison(true)) };
 
-    fn lock_checked(&self) -> Result<RawOnceState, TryLockError<()>> {
+    fn write_checked(&self) -> Result<RawFusedState, TryLockError<()>> {
         let state = self.state.load(Ordering::Acquire);
         if state.init() {
-            return Ok(RawOnceState::Occupied);
+            return Ok(RawFusedState::Read);
         }
         self.lock_checked_slow(state)
     }
 
-    fn try_lock_checked(&self) -> Result<Option<RawOnceState>, PoisonError<()>> {
+    fn try_write_checked(&self) -> Result<Option<RawFusedState>, PoisonError<()>> {
         let state = self.state.load(Ordering::Acquire);
         if state.init() {
-            return Ok(Some(RawOnceState::Occupied));
+            return Ok(Some(RawFusedState::Read));
         }
         self.try_lock_checked_slow(state)
     }
 
-    fn get_checked(&self) -> Result<RawOnceState, TryLockError<()>> {
+    fn read_checked(&self) -> Result<RawFusedState, TryLockError<()>> {
         let state = self.state.load(Ordering::Acquire);
         if state.init() {
-            return Ok(RawOnceState::Occupied);
+            return Ok(RawFusedState::Read);
         }
         self.get_checked_slow(state)
     }
 
-    fn try_get_checked(&self) -> Result<RawOnceState, PoisonError<()>> {
+    fn try_read_checked(&self) -> Result<RawFusedState, PoisonError<()>> {
         let state = self.state.load(Ordering::Acquire);
         if state.init() {
-            return Ok(RawOnceState::Occupied);
+            return Ok(RawFusedState::Read);
         }
         if state.poison() {
             return Err(PoisonError::new(()));
         }
-        return Ok(RawOnceState::Vacant);
+        return Ok(RawFusedState::Write);
     }
 
-    unsafe fn unlock_nopoison(&self) {
+    unsafe fn unlock(&self) {
         self.unlock_impl(State::new());
     }
 
-    unsafe fn unlock_init(&self) {
+    unsafe fn unlock_fuse(&self) {
         self.unlock_impl(State::new().with_init(true));
     }
 
     unsafe fn unlock_poison(&self) {
         self.unlock_impl(State::new().with_poison(true));
     }
+
+    fn try_get_mut(&mut self) -> Result<RawFusedState, PoisonError<()>> {
+        let state = *self.state.get_mut();
+        if state.init() {
+            return Ok(RawFusedState::Read);
+        }
+        if state.poison() {
+            return Err(PoisonError::new(()));
+        }
+        return Ok(RawFusedState::Write);
+    }
 }
 
-impl RefUnwindSafe for RawOnceLock {}
+impl RefUnwindSafe for RawFusedLock {}
 
-impl UnwindSafe for RawOnceLock {}
+impl UnwindSafe for RawFusedLock {}

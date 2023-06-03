@@ -3,39 +3,36 @@
 use std::cell::UnsafeCell;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
+use std::mem;
 use std::mem::MaybeUninit;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::sync::{PoisonError, TryLockError};
 use std::thread::panicking;
-use crate::{RawOnce, RawOnceState};
+use crate::{RawFused, RawFusedState};
+use crate::fused::{Fused, FusedEntry, FusedGuard};
 
-pub enum OnceEntry<'a, R: RawOnce, T> {
+#[derive(Debug)]
+pub struct Once<R: RawFused, T> {
+    fused: Fused<R, MaybeUninit<T>>,
+}
+
+pub enum OnceEntry<'a, R: RawFused, T> {
     Occupied(&'a T),
     Vacant(OnceGuard<'a, R, T>),
 }
 
-pub struct Once<R: RawOnce, T> {
-    raw: R,
-    data: UnsafeCell<MaybeUninit<T>>,
-}
+pub struct OnceGuard<'a, R: RawFused, T>(FusedGuard<'a, R, MaybeUninit<T>>);
 
-pub struct OnceGuard<'a, R: RawOnce, T> {
-    once: Option<&'a Once<R, T>>,
-    marker: PhantomData<(&'a mut T, R::GuardMarker)>,
-}
-
-impl<'a, R: RawOnce, T> OnceGuard<'a, R, T> {
+impl<'a, R: RawFused, T> OnceGuard<'a, R, T> {
     pub fn init(mut self, value: T) -> &'a T {
         unsafe {
-            let once = self.once.take().unwrap();
-            (*once.data.get()).write(value);
-            once.raw.unlock_init();
-            (*once.data.get()).assume_init_ref()
+            self.0.write(value);
+            self.0.fuse().assume_init_ref()
         }
     }
 }
 
-impl<'a, R: RawOnce, T> OnceEntry<'a, R, T> {
+impl<'a, R: RawFused, T> OnceEntry<'a, R, T> {
     pub fn or_init(self, value: impl FnOnce() -> T) -> &'a T {
         match self {
             OnceEntry::Occupied(x) => x,
@@ -44,34 +41,30 @@ impl<'a, R: RawOnce, T> OnceEntry<'a, R, T> {
     }
 }
 
-impl<R: RawOnce, T> Once<R, T> {
+impl<R: RawFused, T> Once<R, T> {
     pub const fn new() -> Self {
-        Once {
-            raw: R::UNINIT,
-            data: UnsafeCell::new(MaybeUninit::uninit()),
-        }
+        Once { fused: Fused::new(MaybeUninit::uninit()) }
     }
     pub const fn poisoned() -> Self {
-        Once {
-            raw: R::POISON,
-            data: UnsafeCell::new(MaybeUninit::uninit()),
-        }
+        Once { fused: Fused::poisoned(MaybeUninit::uninit()) }
     }
-    unsafe fn make_entry(&self, raw: RawOnceState) -> OnceEntry<R, T> {
-        match raw {
-            RawOnceState::Vacant => OnceEntry::Vacant(OnceGuard { once: Some(self), marker: PhantomData }),
-            RawOnceState::Occupied => OnceEntry::Occupied((*self.data.get()).assume_init_ref()),
+    unsafe fn make_entry<'a>(&'a self, raw: FusedEntry<'a, R, MaybeUninit<T>>) -> OnceEntry<'a, R, T> {
+        unsafe {
+            match raw {
+                FusedEntry::Read(read) => OnceEntry::Occupied(read.assume_init_ref()),
+                FusedEntry::Write(write) => OnceEntry::Vacant(OnceGuard(write)),
+            }
         }
     }
     pub fn lock_checked(&self) -> Result<OnceEntry<R, T>, TryLockError<()>> {
         unsafe {
-            Ok(self.make_entry(self.raw.lock_checked()?))
+            Ok(self.make_entry(self.fused.write_checked()?))
         }
     }
     pub fn lock(&self) -> OnceEntry<R, T> { self.lock_checked().unwrap() }
     pub fn try_lock_checked(&self) -> Result<Option<OnceEntry<R, T>>, TryLockError<()>> {
         unsafe {
-            Ok(self.raw.try_lock_checked()?.map(|e| self.make_entry(e)))
+            Ok(self.fused.try_write_checked()?.map(|e| self.make_entry(e)))
         }
     }
     pub fn try_lock(&self) -> Option<OnceEntry<R, T>> {
@@ -85,18 +78,12 @@ impl<R: RawOnce, T> Once<R, T> {
     }
     pub fn try_get_checked(&self) -> Result<Option<&T>, PoisonError<()>> {
         unsafe {
-            Ok(match self.raw.try_get_checked()? {
-                RawOnceState::Vacant => None,
-                RawOnceState::Occupied => Some((*self.data.get()).assume_init_ref())
-            })
+            Ok(self.fused.try_read_checked()?.map(|x| x.assume_init_ref()))
         }
     }
     pub fn get_checked(&self) -> Result<Option<&T>, TryLockError<()>> {
         unsafe {
-            Ok(match self.raw.get_checked()? {
-                RawOnceState::Vacant => None,
-                RawOnceState::Occupied => Some((*self.data.get()).assume_init_ref())
-            })
+            Ok(self.fused.read_checked()?.map(|x| x.assume_init_ref()))
         }
     }
     pub fn try_get(&self) -> Option<&T> {
@@ -105,75 +92,65 @@ impl<R: RawOnce, T> Once<R, T> {
     pub fn get(&self) -> Option<&T> {
         self.get_checked().unwrap()
     }
+    fn into_inner_raw(self) -> Fused<R, MaybeUninit<T>> {
+        unsafe {
+            let result = ((&self.fused) as *const Fused<_, _>).read();
+            mem::forget(self);
+            result
+        }
+    }
     pub fn into_inner(mut self) -> Option<T> {
         unsafe {
-            match self.raw.try_get_checked().unwrap() {
-                RawOnceState::Occupied => {
-                    self.raw = RawOnce::POISON;
-                    Some((*self.data.get()).assume_init_read())
-                }
-                RawOnceState::Vacant => None
+            let (state, value) = self.into_inner_raw().into_inner();
+            // self.fused = Fused::poisoned(MaybeUninit::uninit());
+            match state {
+                Ok(RawFusedState::Read) | Err(_) => { Some(value.assume_init_read()) }
+                Ok(RawFusedState::Write) => None
             }
         }
     }
 }
 
-impl<R: RawOnce, T> Drop for Once<R, T> {
+impl<R: RawFused, T> Drop for Once<R, T> {
     fn drop(&mut self) {
         unsafe {
-            match self.raw.try_get_checked() {
-                Ok(RawOnceState::Occupied) => {
-                    self.raw = RawOnce::POISON;
-                    (*self.data.get()).assume_init_drop();
-                }
-                _ => {}
+            let (state, value) = self.fused.get_mut();
+            match state {
+                Ok(RawFusedState::Read) | Err(_) => value.assume_init_drop(),
+                Ok(RawFusedState::Write) => {}
             }
         }
     }
 }
 
-impl<'a, R: RawOnce, T> Drop for OnceGuard<'a, R, T> {
-    fn drop(&mut self) {
-        unsafe {
-            if let Some(once) = self.once {
-                if panicking() {
-                    once.raw.unlock_poison();
-                } else {
-                    once.raw.unlock_nopoison();
-                }
-            }
-        }
-    }
-}
-
-impl<R: RawOnce, T> From<T> for Once<R, T> {
+impl<R: RawFused, T> From<T> for Once<R, T> {
     fn from(value: T) -> Self {
-        Once { raw: R::INIT, data: UnsafeCell::new(MaybeUninit::new(value)) }
+        Once { fused: Fused::new_read(MaybeUninit::new(value)) }
     }
 }
 
-unsafe impl<R: RawOnce + Send, T: Send> Send for Once<R, T> {}
+unsafe impl<R: RawFused + Send, T: Send> Send for Once<R, T> {}
 
-unsafe impl<R: RawOnce + Send + Sync, T: Send + Sync> Sync for Once<R, T> {}
+unsafe impl<R: RawFused + Send + Sync, T: Send + Sync> Sync for Once<R, T> {}
 
-impl<R: RawOnce + RefUnwindSafe + UnwindSafe, T: RefUnwindSafe + UnwindSafe> RefUnwindSafe for Once<R, T> {}
+impl<R: RawFused + RefUnwindSafe + UnwindSafe, T: RefUnwindSafe + UnwindSafe> RefUnwindSafe for Once<R, T> {}
 
-impl<R: RawOnce + UnwindSafe, T: UnwindSafe> UnwindSafe for Once<R, T> {}
+impl<R: RawFused + UnwindSafe, T: UnwindSafe> UnwindSafe for Once<R, T> {}
 
-impl<R: RawOnce + Debug, T: Debug> Debug for Once<R, T> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Once")
-            .field("raw", &self.raw)
-            .field("value", &self.try_get())
-            .finish()
-    }
-}
+// impl<R: RawFused + Debug, T: Debug> Debug for Once<R, T> {
+//     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+//         f.debug_struct("Once")
+//             .field("raw", &self.fu)
+//             .field("value", &self.try_get())
+//             .finish()
+//     }
+// }
 
-impl<R: RawOnce, T> Default for Once<R, T> {
+impl<R: RawFused, T> Default for Once<R, T> {
     fn default() -> Self { Once::new() }
 }
 
-impl<R: RawOnce, T: Clone> Clone for Once<R, T> {
+impl<R: RawFused, T: Clone> Clone for Once<R, T> {
     fn clone(&self) -> Self {
         match self.try_get_checked() {
             Ok(Some(x)) => Once::from(x.clone()),
