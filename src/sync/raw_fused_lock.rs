@@ -12,9 +12,8 @@ use atomic::Atomic;
 use parking_lot::lock_api::GuardSend;
 
 use parking_lot_core::{DEFAULT_PARK_TOKEN, DEFAULT_UNPARK_TOKEN, SpinWait};
+use crate::api::raw::{RawFused, RawFusedState};
 // use crate::error::{LockError, PoisonError};
-use crate::once::Once;
-use crate::raw::{RawFused, RawFusedState};
 use crate::sync::state::State;
 use crate::sync::thread_id::ThreadId;
 

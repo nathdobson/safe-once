@@ -8,8 +8,8 @@ use std::mem::MaybeUninit;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::sync::{PoisonError, TryLockError};
 use std::thread::panicking;
-use crate::{RawFused, RawFusedState};
-use crate::fused::{Fused, FusedEntry, FusedGuard};
+use crate::api::fused::{Fused, FusedEntry, FusedGuard};
+use crate::api::raw::{RawFused, RawFusedState};
 
 #[derive(Debug)]
 pub struct Once<R: RawFused, T> {

@@ -2,6 +2,7 @@
 #![allow(unused_imports)]
 #![allow(unused_variables)]
 #![allow(unused_assignments)]
+#![allow(unused_mut)]
 
 
 //!
@@ -33,8 +34,8 @@
 //!
 //! Or use the `lock` method to have complete flexibility over initialization:
 //! ```
-//! use safe_once::once::OnceEntry;
-//! use safe_once::sync::{OnceLock, RawFusedLock};
+//! use safe_once::api::once::OnceEntry;
+//! use safe_once::sync::OnceLock;
 //! static ONCE: OnceLock<String> = OnceLock::new();
 //! match ONCE.lock(){
 //!     OnceEntry::Occupied(value) => unreachable!(),
@@ -55,7 +56,7 @@
 //! This allows multiple mutation steps before making the value readable:
 //!
 //! ```
-//! use safe_once::fused::FusedEntry;
+//! use safe_once::api::fused::FusedEntry;
 //! use safe_once::sync::{FusedLock};
 //! use safe_once::cell::{FusedCell};
 //! let fused = FusedLock::new(vec![]);
@@ -84,20 +85,7 @@
 //! ```
 //!
 
-pub mod raw;
-
-use std::cell::UnsafeCell;
-use std::fmt::{Debug, Display, Formatter};
-use std::marker::PhantomData;
-use std::mem::MaybeUninit;
-use std::panic::{RefUnwindSafe, UnwindSafe};
-use std::thread::panicking;
-use raw::{RawFused, RawFusedState};
-
 pub mod sync;
 pub mod cell;
 
-pub mod lazy;
-pub mod once;
-pub mod fused;
-// pub mod mut_cell;
+pub mod api;

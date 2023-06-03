@@ -4,9 +4,8 @@ use std::cell::Cell;
 use std::fmt::{Debug, Formatter};
 use std::mem;
 use std::ops::Deref;
-use crate::fused::Fused;
-use crate::once::Once;
-use crate::RawFused;
+use crate::api::fused::Fused;
+use crate::api::raw::RawFused;
 
 enum State<T, F> {
     Callback(F),

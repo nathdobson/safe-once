@@ -3,7 +3,7 @@ use std::sync::{Arc, Barrier, PoisonError, TryLockError};
 use std::thread;
 use std::time::Duration;
 use parking_lot::{Mutex, RwLock};
-use crate::once::OnceEntry;
+use crate::api::once::OnceEntry;
 use crate::sync::OnceLock;
 
 #[test]

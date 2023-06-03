@@ -5,7 +5,7 @@ use std::ops::{Deref, DerefMut};
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::sync::{PoisonError, TryLockError};
 use std::thread::panicking;
-use crate::{RawFused, RawFusedState};
+use crate::api::raw::{RawFused, RawFusedState};
 
 // A mutex that can be made permanently read-only.
 pub struct Fused<R: RawFused, T> {

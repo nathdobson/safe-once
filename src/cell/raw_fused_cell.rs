@@ -4,9 +4,8 @@ use std::mem::MaybeUninit;
 use std::sync::{PoisonError, TryLockError};
 use std::thread::panicking;
 use parking_lot::lock_api::GuardNoSend;
+use crate::api::raw::{RawFused, RawFusedState};
 // use crate::error::{LockError, PoisonError};
-use crate::once::Once;
-use crate::raw::{RawFused, RawFusedState};
 
 #[derive(Copy, Clone, Debug)]
 enum State {

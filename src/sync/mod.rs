@@ -7,9 +7,9 @@ mod state;
 mod thread_id;
 
 pub use raw_fused_lock::*;
-use crate::fused::Fused;
-use crate::lazy::Lazy;
-use crate::once::Once;
+use crate::api::fused::Fused;
+use crate::api::lazy::Lazy;
+use crate::api::once::Once;
 
 pub type OnceLock<T> = Once<RawFusedLock, T>;
 pub type LazyLock<T, F = fn() -> T> = Lazy<RawFusedLock, T, F>;
