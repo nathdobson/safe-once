@@ -4,7 +4,6 @@
 #![allow(unused_assignments)]
 #![allow(unused_mut)]
 
-
 //!
 //! This crate provides alternative implementations of the standard library's
 //! [LazyCell](std::cell::LazyCell), [LazyLock](std::sync::LazyLock),
@@ -69,7 +68,7 @@
 //! fused.write().or_fuse(|vec|{
 //!     vec.reverse();
 //! });
-//! assert_eq!(fused.read().unwrap(), &[9,8,7,6,5,4,3,2,1,0]);
+//! assert_eq!(fused.try_read().unwrap(), &[9,8,7,6,5,4,3,2,1,0]);
 //! ```
 //!
 //! # Deadlock detection
@@ -85,7 +84,7 @@
 //! ```
 //!
 
-pub mod sync;
 pub mod cell;
+pub mod sync;
 
 pub mod api;

@@ -1,3 +1,5 @@
+use atomic::Atomic;
+use parking_lot::lock_api::GuardSend;
 use std::cell::UnsafeCell;
 use std::fmt::{Debug, Formatter};
 use std::mem;
@@ -8,15 +10,12 @@ use std::sync::atomic::Ordering::{Acquire, Relaxed, Release};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{PoisonError, TryLockError};
 use std::thread::{panicking, Thread};
-use atomic::Atomic;
-use parking_lot::lock_api::GuardSend;
 
-use parking_lot_core::{DEFAULT_PARK_TOKEN, DEFAULT_UNPARK_TOKEN, SpinWait};
 use crate::api::raw::{RawFused, RawFusedState};
+use parking_lot_core::{SpinWait, DEFAULT_PARK_TOKEN, DEFAULT_UNPARK_TOKEN};
 // use crate::error::{LockError, PoisonError};
 use crate::sync::state::State;
 use crate::sync::thread_id::ThreadId;
-
 
 #[derive(Debug)]
 pub struct RawFusedLock {
@@ -37,7 +36,11 @@ impl RawFusedLock {
             if !state.locked() {
                 assert_eq!(state, State::new());
                 if let Err(new_state) = self.state.compare_exchange_weak(
-                    state, State::new().with_thread_id(tid).with_locked(true), Relaxed, Acquire) {
+                    state,
+                    State::new().with_thread_id(tid).with_locked(true),
+                    Relaxed,
+                    Acquire,
+                ) {
                     state = new_state;
                     continue;
                 }
@@ -48,7 +51,11 @@ impl RawFusedLock {
             }
             if !state.parked() {
                 if let Err(new_state) = self.state.compare_exchange_weak(
-                    state, state.with_parked(true), Relaxed, Acquire) {
+                    state,
+                    state.with_parked(true),
+                    Relaxed,
+                    Acquire,
+                ) {
                     state = new_state;
                     continue;
                 }
@@ -75,54 +82,57 @@ impl RawFusedLock {
         }
     }
 
-    #[cold]
-    fn get_checked_slow(&self, mut state: State) -> Result<RawFusedState, TryLockError<()>> {
-        let tid = ThreadId::current();
-        loop {
-            if state.init() {
-                return Ok(RawFusedState::Read);
-            }
-            if state.poison() {
-                return Err(PoisonError::new(()).into());
-            }
-            if !state.locked() {
-                assert_eq!(state, State::new());
-                return Ok(RawFusedState::Write);
-            }
-            if state.thread_id() == tid {
-                return Err(TryLockError::WouldBlock);
-            }
-            if !state.parked() {
-                if let Err(new_state) = self.state.compare_exchange_weak(
-                    state, state.with_parked(true), Relaxed, Acquire) {
-                    state = new_state;
-                    continue;
-                }
-                state = state.with_parked(true);
-            }
-            let addr = self as *const _ as usize;
-            let validate = || {
-                let state = self.state.load(Ordering::Relaxed);
-                state.locked() && state.parked()
-            };
-            let before_sleep = || {};
-            let timed_out = |_, _| unreachable!();
-            unsafe {
-                parking_lot_core::park(
-                    addr,
-                    validate,
-                    before_sleep,
-                    timed_out,
-                    DEFAULT_PARK_TOKEN,
-                    None,
-                );
-            }
-            state = self.state.load(Ordering::Acquire);
-        }
-    }
+    // #[cold]
+    // fn get_checked_slow(&self, mut state: State) -> Result<RawFusedState, TryLockError<()>> {
+    //     let tid = ThreadId::current();
+    //     loop {
+    //         if state.init() {
+    //             return Ok(RawFusedState::Read);
+    //         }
+    //         if state.poison() {
+    //             return Err(PoisonError::new(()).into());
+    //         }
+    //         if !state.locked() {
+    //             assert_eq!(state, State::new());
+    //             return Ok(RawFusedState::Write);
+    //         }
+    //         if state.thread_id() == tid {
+    //             return Err(TryLockError::WouldBlock);
+    //         }
+    //         if !state.parked() {
+    //             if let Err(new_state) = self.state.compare_exchange_weak(
+    //                 state, state.with_parked(true), Relaxed, Acquire) {
+    //                 state = new_state;
+    //                 continue;
+    //             }
+    //             state = state.with_parked(true);
+    //         }
+    //         let addr = self as *const _ as usize;
+    //         let validate = || {
+    //             let state = self.state.load(Ordering::Relaxed);
+    //             state.locked() && state.parked()
+    //         };
+    //         let before_sleep = || {};
+    //         let timed_out = |_, _| unreachable!();
+    //         unsafe {
+    //             parking_lot_core::park(
+    //                 addr,
+    //                 validate,
+    //                 before_sleep,
+    //                 timed_out,
+    //                 DEFAULT_PARK_TOKEN,
+    //                 None,
+    //             );
+    //         }
+    //         state = self.state.load(Ordering::Acquire);
+    //     }
+    // }
 
     #[cold]
-    fn try_lock_checked_slow(&self, mut state: State) -> Result<Option<RawFusedState>, PoisonError<()>> {
+    fn try_lock_checked_slow(
+        &self,
+        mut state: State,
+    ) -> Result<Option<RawFusedState>, PoisonError<()>> {
         let tid = ThreadId::current();
         loop {
             if state.init() {
@@ -134,7 +144,11 @@ impl RawFusedLock {
             if !state.locked() {
                 assert_eq!(state, State::new());
                 if let Err(new_state) = self.state.compare_exchange_weak(
-                    state, State::new().with_thread_id(tid).with_locked(true), Relaxed, Acquire) {
+                    state,
+                    State::new().with_thread_id(tid).with_locked(true),
+                    Relaxed,
+                    Acquire,
+                ) {
                     state = new_state;
                     continue;
                 }
@@ -157,9 +171,15 @@ impl RawFusedLock {
 
 unsafe impl RawFused for RawFusedLock {
     type GuardMarker = GuardSend;
-    const UNLOCKED: Self = RawFusedLock { state: Atomic::new(State::new()) };
-    const READ: Self = RawFusedLock { state: Atomic::new(State::new().with_init(true)) };
-    const POISON: Self = RawFusedLock { state: Atomic::new(State::new().with_poison(true)) };
+    const UNLOCKED: Self = RawFusedLock {
+        state: Atomic::new(State::new()),
+    };
+    const READ: Self = RawFusedLock {
+        state: Atomic::new(State::new().with_init(true)),
+    };
+    const POISON: Self = RawFusedLock {
+        state: Atomic::new(State::new().with_poison(true)),
+    };
 
     fn write_checked(&self) -> Result<RawFusedState, TryLockError<()>> {
         let state = self.state.load(Ordering::Acquire);
@@ -177,13 +197,13 @@ unsafe impl RawFused for RawFusedLock {
         self.try_lock_checked_slow(state)
     }
 
-    fn read_checked(&self) -> Result<RawFusedState, TryLockError<()>> {
-        let state = self.state.load(Ordering::Acquire);
-        if state.init() {
-            return Ok(RawFusedState::Read);
-        }
-        self.get_checked_slow(state)
-    }
+    // fn read_checked(&self) -> Result<RawFusedState, TryLockError<()>> {
+    //     let state = self.state.load(Ordering::Acquire);
+    //     if state.init() {
+    //         return Ok(RawFusedState::Read);
+    //     }
+    //     self.get_checked_slow(state)
+    // }
 
     fn try_read_checked(&self) -> Result<RawFusedState, PoisonError<()>> {
         let state = self.state.load(Ordering::Acquire);

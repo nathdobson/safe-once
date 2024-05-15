@@ -1,10 +1,10 @@
+use crate::api::raw::{RawFused, RawFusedState};
+use parking_lot::lock_api::GuardNoSend;
 use std::cell::{Cell, UnsafeCell};
 use std::fmt::{Debug, Formatter};
 use std::mem::MaybeUninit;
 use std::sync::{PoisonError, TryLockError};
 use std::thread::panicking;
-use parking_lot::lock_api::GuardNoSend;
-use crate::api::raw::{RawFused, RawFusedState};
 // use crate::error::{LockError, PoisonError};
 
 #[derive(Copy, Clone, Debug)]
@@ -34,17 +34,14 @@ unsafe impl RawFused for RawFusedCell {
                 self.0.set(State::Initializing);
                 Ok(Some(RawFusedState::Write))
             }
-            State::Initializing =>
-                Ok(None),
-            State::Initialized =>
-                Ok(Some(RawFusedState::Read)),
-            State::Poison =>
-                Err(PoisonError::new(())),
+            State::Initializing => Ok(None),
+            State::Initialized => Ok(Some(RawFusedState::Read)),
+            State::Poison => Err(PoisonError::new(())),
         }
     }
-    fn read_checked(&self) -> Result<RawFusedState, TryLockError<()>> {
-        Ok(self.try_read_checked()?)
-    }
+    // fn read_checked(&self) -> Result<RawFusedState, TryLockError<()>> {
+    //     Ok(self.try_read_checked()?)
+    // }
 
     fn try_read_checked(&self) -> Result<RawFusedState, PoisonError<()>> {
         match self.0.get() {

@@ -1,3 +1,4 @@
+use crate::api::raw::{RawFused, RawFusedState};
 use std::cell::UnsafeCell;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
@@ -5,7 +6,6 @@ use std::ops::{Deref, DerefMut};
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::sync::{PoisonError, TryLockError};
 use std::thread::panicking;
-use crate::api::raw::{RawFused, RawFusedState};
 
 // A mutex that can be made permanently read-only.
 pub struct Fused<R: RawFused, T> {
@@ -90,31 +90,35 @@ impl<R: RawFused, T> Fused<R, T> {
     }
     unsafe fn make_entry(&self, raw: RawFusedState) -> FusedEntry<R, T> {
         match raw {
-            RawFusedState::Write => FusedEntry::Write(FusedGuard { fused: Some(self), marker: PhantomData }),
+            RawFusedState::Write => FusedEntry::Write(FusedGuard {
+                fused: Some(self),
+                marker: PhantomData,
+            }),
             RawFusedState::Read => FusedEntry::Read(&*self.data.get()),
         }
     }
     /// Attempt to obtain a write lock and block if necessary.
     pub fn write_checked(&self) -> Result<FusedEntry<R, T>, TryLockError<()>> {
-        unsafe {
-            Ok(self.make_entry(self.raw.write_checked()?))
-        }
+        unsafe { Ok(self.make_entry(self.raw.write_checked()?)) }
     }
     /// Attempt to obtain a write lock and block if necessary. Panics if poisoned or deadlocked.
-    pub fn write(&self) -> FusedEntry<R, T> { self.write_checked().unwrap() }
+    pub fn write(&self) -> FusedEntry<R, T> {
+        self.write_checked().unwrap()
+    }
     /// Attempt to obtain a write lock without blocking.
     pub fn try_write_checked(&self) -> Result<Option<FusedEntry<R, T>>, TryLockError<()>> {
-        unsafe {
-            Ok(self.raw.try_write_checked()?.map(|e| self.make_entry(e)))
-        }
+        unsafe { Ok(self.raw.try_write_checked()?.map(|e| self.make_entry(e))) }
     }
     /// Attempt to obtain a write lock without blocking. Panics if poisoned or deadlocked.
     pub fn try_write(&self) -> Option<FusedEntry<R, T>> {
         self.try_write_checked().unwrap()
     }
     /// If this is writeable, obtain a write lock, apply the modifier, make readable, and then
-    /// return a reference. Otherwise just return the reference. 
-    pub fn read_or_fuse_checked(&self, modify: impl FnOnce(&mut T)) -> Result<&T, TryLockError<()>> {
+    /// return a reference. Otherwise just return the reference.
+    pub fn read_or_fuse_checked(
+        &self,
+        modify: impl FnOnce(&mut T),
+    ) -> Result<&T, TryLockError<()>> {
         Ok(self.write_checked()?.or_fuse(modify))
     }
     /// If this is writeable, obtain a write lock, apply the modifier, make readable, and then
@@ -127,7 +131,7 @@ impl<R: RawFused, T> Fused<R, T> {
         unsafe {
             Ok(match self.raw.try_read_checked()? {
                 RawFusedState::Write => None,
-                RawFusedState::Read => Some(&*self.data.get())
+                RawFusedState::Read => Some(&*self.data.get()),
             })
         }
     }
@@ -136,17 +140,17 @@ impl<R: RawFused, T> Fused<R, T> {
     pub fn try_read(&self) -> Option<&T> {
         self.try_read_checked().unwrap()
     }
-    pub fn read_checked(&self) -> Result<Option<&T>, TryLockError<()>> {
-        unsafe {
-            Ok(match self.raw.read_checked()? {
-                RawFusedState::Write => None,
-                RawFusedState::Read => Some(&*self.data.get())
-            })
-        }
-    }
-    pub fn read(&self) -> Option<&T> {
-        self.read_checked().unwrap()
-    }
+    // pub fn read_checked(&self) -> Result<Option<&T>, TryLockError<()>> {
+    //     unsafe {
+    //         Ok(match self.raw.read_checked()? {
+    //             RawFusedState::Write => None,
+    //             RawFusedState::Read => Some(&*self.data.get())
+    //         })
+    //     }
+    // }
+    // pub fn read(&self) -> Option<&T> {
+    //     self.read_checked().unwrap()
+    // }
     pub fn get_mut(&mut self) -> (Result<RawFusedState, PoisonError<()>>, &mut T) {
         (self.raw.try_get_mut(), self.data.get_mut())
     }
@@ -160,7 +164,10 @@ unsafe impl<R: RawFused + Send, T: Send> Send for Fused<R, T> {}
 
 unsafe impl<R: RawFused + Send + Sync, T: Send + Sync> Sync for Fused<R, T> {}
 
-impl<R: RawFused + RefUnwindSafe + UnwindSafe, T: RefUnwindSafe + UnwindSafe> RefUnwindSafe for Fused<R, T> {}
+impl<R: RawFused + RefUnwindSafe + UnwindSafe, T: RefUnwindSafe + UnwindSafe> RefUnwindSafe
+    for Fused<R, T>
+{
+}
 
 impl<R: RawFused + UnwindSafe, T: UnwindSafe> UnwindSafe for Fused<R, T> {}
 
@@ -174,7 +181,9 @@ impl<R: RawFused + Debug, T: Debug> Debug for Fused<R, T> {
 }
 
 impl<R: RawFused, T: Default> Default for Fused<R, T> {
-    fn default() -> Self { Fused::new(T::default()) }
+    fn default() -> Self {
+        Fused::new(T::default())
+    }
 }
 
 impl<'a, R: RawFused, T> Drop for FusedGuard<'a, R, T> {

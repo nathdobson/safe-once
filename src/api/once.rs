@@ -1,5 +1,7 @@
 //! A lazy initialization pattern where the initializer is supplied at access time.
 
+use crate::api::fused::{Fused, FusedEntry, FusedGuard};
+use crate::api::raw::{RawFused, RawFusedState};
 use std::cell::UnsafeCell;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
@@ -8,8 +10,6 @@ use std::mem::MaybeUninit;
 use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::sync::{PoisonError, TryLockError};
 use std::thread::panicking;
-use crate::api::fused::{Fused, FusedEntry, FusedGuard};
-use crate::api::raw::{RawFused, RawFusedState};
 
 #[derive(Debug)]
 pub struct Once<R: RawFused, T> {
@@ -36,19 +36,26 @@ impl<'a, R: RawFused, T> OnceEntry<'a, R, T> {
     pub fn or_init(self, value: impl FnOnce() -> T) -> &'a T {
         match self {
             OnceEntry::Occupied(x) => x,
-            OnceEntry::Vacant(x) => x.init(value())
+            OnceEntry::Vacant(x) => x.init(value()),
         }
     }
 }
 
 impl<R: RawFused, T> Once<R, T> {
     pub const fn new() -> Self {
-        Once { fused: Fused::new(MaybeUninit::uninit()) }
+        Once {
+            fused: Fused::new(MaybeUninit::uninit()),
+        }
     }
     pub const fn poisoned() -> Self {
-        Once { fused: Fused::poisoned(MaybeUninit::uninit()) }
+        Once {
+            fused: Fused::poisoned(MaybeUninit::uninit()),
+        }
     }
-    unsafe fn make_entry<'a>(&'a self, raw: FusedEntry<'a, R, MaybeUninit<T>>) -> OnceEntry<'a, R, T> {
+    unsafe fn make_entry<'a>(
+        &'a self,
+        raw: FusedEntry<'a, R, MaybeUninit<T>>,
+    ) -> OnceEntry<'a, R, T> {
         unsafe {
             match raw {
                 FusedEntry::Read(read) => OnceEntry::Occupied(read.assume_init_ref()),
@@ -57,15 +64,13 @@ impl<R: RawFused, T> Once<R, T> {
         }
     }
     pub fn lock_checked(&self) -> Result<OnceEntry<R, T>, TryLockError<()>> {
-        unsafe {
-            Ok(self.make_entry(self.fused.write_checked()?))
-        }
+        unsafe { Ok(self.make_entry(self.fused.write_checked()?)) }
     }
-    pub fn lock(&self) -> OnceEntry<R, T> { self.lock_checked().unwrap() }
+    pub fn lock(&self) -> OnceEntry<R, T> {
+        self.lock_checked().unwrap()
+    }
     pub fn try_lock_checked(&self) -> Result<Option<OnceEntry<R, T>>, TryLockError<()>> {
-        unsafe {
-            Ok(self.fused.try_write_checked()?.map(|e| self.make_entry(e)))
-        }
+        unsafe { Ok(self.fused.try_write_checked()?.map(|e| self.make_entry(e))) }
     }
     pub fn try_lock(&self) -> Option<OnceEntry<R, T>> {
         self.try_lock_checked().unwrap()
@@ -77,21 +82,19 @@ impl<R: RawFused, T> Once<R, T> {
         Ok(self.lock_checked()?.or_init(init))
     }
     pub fn try_get_checked(&self) -> Result<Option<&T>, PoisonError<()>> {
-        unsafe {
-            Ok(self.fused.try_read_checked()?.map(|x| x.assume_init_ref()))
-        }
+        unsafe { Ok(self.fused.try_read_checked()?.map(|x| x.assume_init_ref())) }
     }
-    pub fn get_checked(&self) -> Result<Option<&T>, TryLockError<()>> {
-        unsafe {
-            Ok(self.fused.read_checked()?.map(|x| x.assume_init_ref()))
-        }
-    }
+    // pub fn get_checked(&self) -> Result<Option<&T>, TryLockError<()>> {
+    //     unsafe {
+    //         Ok(self.fused.read_checked()?.map(|x| x.assume_init_ref()))
+    //     }
+    // }
     pub fn try_get(&self) -> Option<&T> {
         self.try_get_checked().unwrap()
     }
-    pub fn get(&self) -> Option<&T> {
-        self.get_checked().unwrap()
-    }
+    // pub fn get(&self) -> Option<&T> {
+    //     self.get_checked().unwrap()
+    // }
     fn into_inner_raw(self) -> Fused<R, MaybeUninit<T>> {
         unsafe {
             let result = ((&self.fused) as *const Fused<_, _>).read();
@@ -104,8 +107,8 @@ impl<R: RawFused, T> Once<R, T> {
             let (state, value) = self.into_inner_raw().into_inner();
             // self.fused = Fused::poisoned(MaybeUninit::uninit());
             match state {
-                Ok(RawFusedState::Read) | Err(_) => { Some(value.assume_init_read()) }
-                Ok(RawFusedState::Write) => None
+                Ok(RawFusedState::Read) | Err(_) => Some(value.assume_init_read()),
+                Ok(RawFusedState::Write) => None,
             }
         }
     }
@@ -125,7 +128,9 @@ impl<R: RawFused, T> Drop for Once<R, T> {
 
 impl<R: RawFused, T> From<T> for Once<R, T> {
     fn from(value: T) -> Self {
-        Once { fused: Fused::new_read(MaybeUninit::new(value)) }
+        Once {
+            fused: Fused::new_read(MaybeUninit::new(value)),
+        }
     }
 }
 
@@ -133,7 +138,10 @@ unsafe impl<R: RawFused + Send, T: Send> Send for Once<R, T> {}
 
 unsafe impl<R: RawFused + Send + Sync, T: Send + Sync> Sync for Once<R, T> {}
 
-impl<R: RawFused + RefUnwindSafe + UnwindSafe, T: RefUnwindSafe + UnwindSafe> RefUnwindSafe for Once<R, T> {}
+impl<R: RawFused + RefUnwindSafe + UnwindSafe, T: RefUnwindSafe + UnwindSafe> RefUnwindSafe
+    for Once<R, T>
+{
+}
 
 impl<R: RawFused + UnwindSafe, T: UnwindSafe> UnwindSafe for Once<R, T> {}
 
@@ -147,7 +155,9 @@ impl<R: RawFused + UnwindSafe, T: UnwindSafe> UnwindSafe for Once<R, T> {}
 // }
 
 impl<R: RawFused, T> Default for Once<R, T> {
-    fn default() -> Self { Once::new() }
+    fn default() -> Self {
+        Once::new()
+    }
 }
 
 impl<R: RawFused, T: Clone> Clone for Once<R, T> {

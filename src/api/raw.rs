@@ -47,7 +47,7 @@ pub unsafe trait RawFused: 'static {
     /// * On WRITE, block or return WouldBlock if a deadlock is detected.
     /// * On READ, return Read.
     /// * On POISON, return Poisoned.
-    fn read_checked(&self) -> Result<RawFusedState, TryLockError<()>>;
+    // fn read_checked(&self) -> Result<RawFusedState, TryLockError<()>>;
 
     /// Attempt to use an existing read lock, but do not block
     /// * On UNLOCKED, return Write.
